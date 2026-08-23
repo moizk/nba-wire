@@ -1,0 +1,12 @@
+{
+  "name": "nba-wire",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Blazing-fast NBA news wire. Mashes up every major NBA feed into one full-screen console.",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  }
+}
