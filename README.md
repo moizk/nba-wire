@@ -52,7 +52,8 @@ Other deliberate choices:
 
 1. **Fetch** — all sources in parallel, 9 s timeout each. A failure falls back to the last
    good payload and shows amber in the Feed Health panel, so one bad feed never blanks the
-   wire.
+   wire. A well-formed feed that is simply empty reports "no items" rather than failing —
+   RotoWire's NBA feed empties out between games.
 2. **Parse** — a small RSS 2.0 + Atom reader. Handles CDATA, double-encoded entities,
    `media:*` / `enclosure` artwork, and per-feed charsets (RealGM still ships ISO-8859-1).
 3. **Clean** — drops feed furniture (promo rows, subreddit megathreads, link roundups),
@@ -63,15 +64,41 @@ Other deliberate choices:
    corroboration. Distinct outlets only — two Yahoo posts about one signing is Yahoo
    repeating itself, not the league confirming it.
 5. **Rank** — recency (6 h half-life) 62%, outlet weight 22%, corroboration 16%.
-6. **Tag** — all 30 teams detected from headline aliases; mixed-sport feeds
-   (CBS, ClutchPoints, Sporting News) are filtered down to basketball.
+6. **Tag** — all 30 teams detected from headline aliases, and everything that isn't
+   men's NBA basketball is dropped (see below).
 
-Feeds flagged `nbaOnly` are filtered in that order of confidence: an `/nba/` path wins
-outright, another sport as its own path segment (`/nfl/`, `/golf/`) is an immediate
-rejection, then the sport buried in a slug under a generic section
-(`/editorials/flyers-…-nhl-free-agency`), then basketball keywords. **Team names are
-weighed last on purpose** — city aliases like "Philadelphia" and "Boston" match other
-leagues, so they must never outrank an explicit sport signal.
+### Keeping it NBA
+
+Almost every feed here carries something else — NFL and golf cross-promos in the ESPN and
+CBS "NBA" feeds, the WNBA in RealGM's and TalkBasket's, and whole other sports in
+ClutchPoints'. Filtering runs in two modes, because one setting cannot serve both cases:
+
+- **Lenient (every source).** Rejects only what positively advertises another sport. An
+  `/nba/` path wins outright; another sport as its own path segment (`/nfl/`, `/golf/`)
+  is an immediate rejection; then the sport buried in a slug under a generic section
+  (`/editorials/flyers-…-nhl-free-agency`); then vocabulary that gives the game away
+  (`touchdown`, `quarterback`, `innings`). Costs **0** stories on RealGM, Hoops Rumors,
+  SB Nation and r/nba while clearing the cross-promos out of ESPN, Yahoo, CBS and
+  TalkBasket.
+- **Strict (`nbaOnly`: ClutchPoints, Sporting News).** Additionally *requires* positive
+  evidence of basketball. Reserved for feeds that are mostly not NBA — ClutchPoints ships
+  75 items of which ~4 are. Applying it everywhere was measured and rejected: it would
+  drop "Rookie Extension Market Remains Quiet With Only Victor Wembanyama" from RealGM and
+  "Kyrie Irving says Kobe Bryant gave him 'The Alchemist'" from TalkBasket.
+
+Two rules do the heavy lifting:
+
+**Team nicknames count, bare cities do not.** `TEAMS` keeps `nicknames` and `cities`
+apart. Tagging uses both, but the filter trusts only nicknames — "Memphis", "Boston" and
+"Philadelphia" are also college-football, NFL and NHL cities, which is how
+"UNLV QB Jackson Arnold … vs. Memphis" once led the wire as a Grizzlies story.
+
+**The WNBA is excluded, on every source.** It is a separate league on an NBA wire, so it
+is rejected rather than accepted as a basketball signal — matched by league name, by
+`/wnba/` paths and slugs, and by city-qualified team names (bare "Storm", "Sky", "Sun" and
+"Fever" are ordinary words, so "Nuggets storm back to beat Suns" survives). An explicit
+`/nba/` path still outranks a WNBA mention, which keeps genuine crossover stories like
+`/nba/news/timberwolves-lynx-ownership-shakeup-nba-wnba-marc-stad`.
 
 Stories carried by two or more independent outlets surface in **Trending**.
 

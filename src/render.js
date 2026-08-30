@@ -161,7 +161,7 @@ function healthPanel(state) {
     // A stale source still has content on screen, so it warns rather than dies.
     const cls = h.ok ? '' : h.stale ? 'warn' : 'dead';
     const note = h.ok
-      ? `${h.count} · ${h.cached ? 'cached' : `${h.ms}ms`}`
+      ? (h.empty ? 'no items' : `${h.count} · ${h.cached ? 'cached' : `${h.ms}ms`}`)
       : h.stale ? `stale · ${esc(h.error || '')}` : esc(h.error || 'down');
     html += `<div class="hrow"><span class="dot ${cls}"></span>`
       + `<span>${esc(h.name)}</span>`

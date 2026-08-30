@@ -1,5 +1,5 @@
 import { stripHtml } from './parse.js';
-import { detectTeams, looksLikeNBA } from './teams.js';
+import { detectTeams, looksLikeNBA, otherSportSignal, isWomensBasketball } from './teams.js';
 
 // ---------------------------------------------------------------------------
 // URL canonicalisation
@@ -139,7 +139,21 @@ export function buildWire(rawBySource, now = Date.now()) {
       if (!title || title.length < 8 || isNoise(title)) continue;
 
       const teams = detectTeams(`${title} ${e.categories.join(' ')}`);
-      if (source.nbaOnly && !looksLikeNBA({ ...e, link }, teams)) continue;
+
+      // Every source gets the lenient pass: reject what advertises another
+      // sport. It costs nothing on the NBA-only feeds and cleans up the
+      // cross-promoted NFL/golf items in the ESPN, Yahoo and CBS feeds.
+      if (otherSportSignal({ ...e, link })) continue;
+
+      // Feeds that are mostly *not* basketball must additionally prove that
+      // they are. Too strict for the rest: it would drop "Rookie Extension
+      // Market Remains Quiet With Only Victor Wembanyama".
+      if (source.nbaOnly && !looksLikeNBA({ ...e, link })) continue;
+
+      const rawSummary = stripHtml(e.summaryRaw, 300);
+      // Applied to every source, not just the mixed-sport ones: the NBA feeds
+      // at RealGM, TalkBasket and Yahoo all carry WNBA items too.
+      if (isWomensBasketball({ ...e, link, summary: rawSummary })) continue;
 
       // Same URL from two feeds: keep the heavier source.
       const prior = seenUrl.get(link);
@@ -157,7 +171,7 @@ export function buildWire(rawBySource, now = Date.now()) {
         title,
         link,
         image: e.image || '',
-        summary: cleanSummary(stripHtml(e.summaryRaw, 300), title),
+        summary: cleanSummary(rawSummary, title),
         author: e.author || '',
         published,
         source,

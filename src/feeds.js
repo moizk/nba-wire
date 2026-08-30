@@ -54,7 +54,11 @@ async function fetchOne(source, now) {
     if (!buf.length) throw new Error('empty body');
     const xml = decodeBody(buf, res.headers.get('content-type') || '');
     const entries = parseFeed(xml);
-    if (!entries.length) throw new Error('no items parsed');
+    if (!entries.length && !/<(rss|feed)\b/i.test(xml.slice(0, 2000))) {
+      throw new Error('no items parsed');
+    }
+    // A well-formed feed with nothing in it is a real state, not an error:
+    // RotoWire's NBA feed empties out between games.
 
     cache.set(source.id, {
       entries, at: now,
@@ -98,13 +102,14 @@ export async function refreshAll() {
       cached: !!r.cached || !!r.notModified,
       ms: r.ms,
       count: r.entries.length,
+      empty: r.ok && r.entries.length === 0,
       error: r.error || null,
     })),
     builtAt: now,
     buildMs: Math.round(performance.now() - started),
     counts: {
       sources: SOURCES.length,
-      live: results.filter((r) => r.entries.length).length,
+      live: results.filter((r) => r.ok).length,
       raw: results.reduce((n, r) => n + r.entries.length, 0),
       stories: stories.length,
     },

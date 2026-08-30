@@ -31,8 +31,6 @@ export const SOURCES = [
     id: 'cbs', name: 'CBS Sports', short: 'CBS', kind: 'major', weight: 0.88,
     url: 'https://www.cbssports.com/rss/headlines/nba/',
     site: 'https://www.cbssports.com/nba/',
-    // The "NBA headlines" feed still cross-promotes NFL, golf and CFB.
-    nbaOnly: true,
   },
   {
     id: 'sbnation', name: 'SB Nation', short: 'SBN', kind: 'analysis', weight: 0.82,
