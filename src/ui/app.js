@@ -231,21 +231,30 @@
 
   /* ---------------------------------------------------------- live update */
 
-  let sig = document.body.dataset.sig || '';
+  let listEtag = document.body.dataset.listEtag || '';
   let pendingHtml = null;
 
+  /**
+   * One conditional request replaces the old poll-then-fetch pair: an unchanged
+   * wire costs a 304 with no body, and a changed one returns the fragment we
+   * were going to ask for anyway.
+   */
   async function check(force = false) {
     try {
-      const r = await fetch('/api/status', { cache: 'no-store' });
+      const headers = {};
+      if (listEtag && !force) headers['if-none-match'] = listEtag;
+      const r = await fetch('/fragment/list', { headers, cache: 'no-store' });
+      if (r.status === 304) return;
       if (!r.ok) return;
-      const s = await r.json();
-      if (s.sig === sig && !force) return;
-      const frag = await fetch('/fragment/list', { cache: 'no-store' });
-      if (!frag.ok) return;
-      pendingHtml = await frag.text();
-      sig = s.sig;
+
+      pendingHtml = await r.text();
+      listEtag = r.headers.get('etag') || listEtag;
       if (force) return swapIn();
-      pillEl.querySelector('b').textContent = s.stories;
+
+      // The pill's count comes from the markup we just received.
+      const n = (pendingHtml.match(/class="row"/g) || []).length
+        + (/class="lead/.test(pendingHtml) ? 1 : 0);
+      pillEl.querySelector('b').textContent = n;
       pillEl.classList.add('on');
     } catch { /* offline or a refresh in flight; the next tick retries */ }
   }

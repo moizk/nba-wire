@@ -53,8 +53,9 @@ async function rebuild() {
     const next = await refreshAll();
     next.sig = await sha256Short(next.stories.map((s) => s.link).join('\n'), 16);
 
-    const page = renderPage(next);
     const list = renderList(next);
+    next.listEtag = `"${await sha256Short(list)}"`;
+    const page = renderPage(next);
     const status = JSON.stringify({ sig: next.sig, builtAt: next.builtAt, stories: next.counts.stories });
     const wire = JSON.stringify({
       builtAt: next.builtAt,
@@ -69,7 +70,9 @@ async function rebuild() {
 
     const fresh = new Map();
     fresh.set('/', await bake(page, 'text/html; charset=utf-8'));
-    fresh.set('/fragment/list', await bake(list, 'text/html; charset=utf-8'));
+    const listAsset = await bake(list, 'text/html; charset=utf-8');
+    listAsset.etag = next.listEtag;   // must match what the page advertises
+    fresh.set('/fragment/list', listAsset);
     fresh.set('/api/status', await bake(status, 'application/json; charset=utf-8'));
     fresh.set('/api/wire', await bake(wire, 'application/json; charset=utf-8'));
 

@@ -6,10 +6,15 @@ import { CSS, JS } from './assets.generated.js';
 // Bump to invalidate every cached route at once.
 const V = 'v1';
 
+// Only three keys are stored. `/api/status` is derived from the `list` key's
+// metadata rather than being a key of its own, because KV quota is counted per
+// key written per cycle, and the free plan allows 1,000 writes/day:
+//   4 keys x 288 cycles (*/5) = 1,152/day  -> over
+//   3 keys x 288 cycles       =   864/day  -> under, and cycles that change
+//                                             nothing write zero.
 const ROUTES = new Map([
   ['/', { key: 'page', type: 'text/html; charset=utf-8' }],
   ['/fragment/list', { key: 'list', type: 'text/html; charset=utf-8' }],
-  ['/api/status', { key: 'status', type: 'application/json; charset=utf-8' }],
   ['/api/wire', { key: 'wire', type: 'application/json; charset=utf-8' }],
 ]);
 
@@ -61,12 +66,21 @@ async function build(env) {
 
   state.sig = await sha256Short(state.stories.map((s) => s.link).join('\n'), 16);
 
+  // list() returns metadata without the value, so checking whether anything
+  // changed costs a list operation rather than a 225kB read.
+  const prev = await env.WIRE.list({ prefix: `${V}:page`, limit: 1 });
+  if (prev.keys?.[0]?.metadata?.sig === state.sig) {
+    return { ok: true, skipped: 'unchanged', stories: state.counts.stories };
+  }
+
+  // The fragment's ETag is embedded in the page so the client can send a
+  // conditional request on its first poll; it must match what we store.
+  const list = renderList(state);
+  state.listEtag = `"${await sha256Short(list)}"`;
+
   const payloads = [
     ['page', renderPage(state), 'text/html; charset=utf-8'],
-    ['list', renderList(state), 'text/html; charset=utf-8'],
-    ['status', JSON.stringify({
-      sig: state.sig, builtAt: state.builtAt, stories: state.counts.stories,
-    }), 'application/json; charset=utf-8'],
+    ['list', list, 'text/html; charset=utf-8'],
     ['wire', JSON.stringify({
       builtAt: state.builtAt,
       counts: state.counts,
@@ -80,9 +94,12 @@ async function build(env) {
   ];
 
   await Promise.all(payloads.map(async ([key, body, type]) => {
-    const etag = `"${await sha256Short(body)}"`;
+    const etag = key === 'list' ? state.listEtag : `"${await sha256Short(body)}"`;
     await env.WIRE.put(`${V}:${key}`, body, {
-      metadata: { etag, type, builtAt: state.builtAt },
+      metadata: {
+        etag, type, builtAt: state.builtAt,
+        sig: state.sig, stories: state.counts.stories,
+      },
     });
   }));
 
@@ -115,16 +132,21 @@ export default {
       return new Response('method not allowed\n', { status: 405, headers: { allow: 'GET, HEAD' } });
     }
 
-    if (url.pathname === '/healthz') {
-      const status = await env.WIRE.get(`${V}:status`, { type: 'json' });
-      const body = JSON.stringify({
-        ok: !!status,
-        builtAt: status?.builtAt ?? null,
-        ageMs: status ? Date.now() - status.builtAt : null,
-        stories: status?.stories ?? null,
-      });
+    // Both of these want the build's metadata, not its content. list() hands
+    // back metadata without transferring any value.
+    if (url.pathname === '/healthz' || url.pathname === '/api/status') {
+      const found = await env.WIRE.list({ prefix: `${V}:list`, limit: 1 });
+      const m = found.keys?.[0]?.metadata;
+      const body = url.pathname === '/api/status'
+        ? JSON.stringify({ sig: m?.sig ?? null, builtAt: m?.builtAt ?? null, stories: m?.stories ?? null })
+        : JSON.stringify({
+          ok: !!m,
+          builtAt: m?.builtAt ?? null,
+          ageMs: m ? Date.now() - m.builtAt : null,
+          stories: m?.stories ?? null,
+        });
       return new Response(body, {
-        status: status ? 200 : 503,
+        status: m || url.pathname === '/api/status' ? 200 : 503,
         headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' },
       });
     }

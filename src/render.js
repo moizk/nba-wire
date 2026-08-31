@@ -200,7 +200,7 @@ export function renderPage(state) {
 <link rel="icon" href="${FAVICON}">
 <style>${CSS}</style>
 </head>
-<body data-sig="${esc(state.sig)}">
+<body data-sig="${esc(state.sig)}" data-list-etag="${esc(state.listEtag || '')}">
 <div class="shell">
 
   <header class="nav">
