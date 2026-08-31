@@ -1,6 +1,18 @@
+# NOTE ON TOML ORDERING: every top-level key must appear BEFORE the first
+# [table] header. Anything after one (e.g. [observability]) is parsed as a
+# member of that table, which is how `routes` once became `observability.routes`
+# and was silently ignored.
+
 name = "nba-wire"
 main = "worker/index.js"
 compatibility_date = "2025-01-01"
+
+# Wrangler creates and manages the DNS records for these itself. Any pre-existing
+# A/CNAME record at the same name must be deleted first or the deploy conflicts.
+routes = [
+  { pattern = "nbawire.org", custom_domain = true },
+  { pattern = "www.nbawire.org", custom_domain = true },
+]
 
 # Rendered routes live in KV, written by the cron below and read on each request.
 # Create the namespace once with:
@@ -8,7 +20,7 @@ compatibility_date = "2025-01-01"
 # then paste the printed id here.
 [[kv_namespaces]]
 binding = "WIRE"
-id = "PASTE_KV_NAMESPACE_ID_HERE"
+id = "7eafee28a14b4d25ae0e07b0690bbd24"
 
 # Every 5 minutes. On the Workers free plan use "*/10 * * * *" instead: KV
 # allows 1,000 writes/day there and each run writes 4 keys (5min = 1,152/day,
@@ -18,10 +30,3 @@ crons = ["*/5 * * * *"]
 
 [observability]
 enabled = true
-
-# Attach the domain after the first successful deploy, once nbawire.org is on
-# Cloudflare DNS. Uncomment, then `npx wrangler deploy`.
-# routes = [
-#   { pattern = "nbawire.org", custom_domain = true },
-#   { pattern = "www.nbawire.org", custom_domain = true },
-# ]
