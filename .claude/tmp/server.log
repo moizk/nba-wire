@@ -2,9 +2,5 @@
 > nba-wire@1.0.0 start
 > node src/server.js
 
-[12:01:22] NBA WIRE listening on http://localhost:8420  (refresh every 90s)
-[12:01:24] refresh ok  10/11 feeds · 347 items → 217 stories · page 206.4kB → 38.6kB br · 2027ms
-[12:02:53] refresh ok  11/11 feeds · 372 items → 236 stories · page 223.0kB → 42.0kB br · 1390ms
-[12:04:23] refresh ok  11/11 feeds · 372 items → 236 stories · page 223.0kB → 42.0kB br · 1307ms
-[12:05:53] refresh ok  11/11 feeds · 372 items → 236 stories · page 223.0kB → 42.0kB br · 1308ms
-[12:07:23] refresh ok  11/11 feeds · 372 items → 236 stories · page 223.0kB → 42.0kB br · 1411ms
+[21:52:07] NBA WIRE listening on http://localhost:8420  (refresh every 90s)
+[21:52:10] refresh ok  11/11 feeds · 374 items → 252 stories · page 238.9kB → 45.8kB br · 2653ms

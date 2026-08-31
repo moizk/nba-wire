@@ -1,0 +1,27 @@
+name = "nba-wire"
+main = "worker/index.js"
+compatibility_date = "2025-01-01"
+
+# Rendered routes live in KV, written by the cron below and read on each request.
+# Create the namespace once with:
+#   npx wrangler kv namespace create WIRE
+# then paste the printed id here.
+[[kv_namespaces]]
+binding = "WIRE"
+id = "PASTE_KV_NAMESPACE_ID_HERE"
+
+# Every 5 minutes. On the Workers free plan use "*/10 * * * *" instead: KV
+# allows 1,000 writes/day there and each run writes 4 keys (5min = 1,152/day,
+# 10min = 576/day).
+[triggers]
+crons = ["*/5 * * * *"]
+
+[observability]
+enabled = true
+
+# Attach the domain after the first successful deploy, once nbawire.org is on
+# Cloudflare DNS. Uncomment, then `npx wrangler deploy`.
+# routes = [
+#   { pattern = "nbawire.org", custom_domain = true },
+#   { pattern = "www.nbawire.org", custom_domain = true },
+# ]

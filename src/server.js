@@ -1,8 +1,13 @@
 import { createServer } from 'node:http';
-import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import { brotliCompressSync, gzipSync, constants as Z } from 'node:zlib';
 import { refreshAll } from './feeds.js';
-import { renderPage, renderList, INLINE_HASHES } from './render.js';
+import { renderPage, renderList, configureAssets, cspHashes } from './render.js';
+import { sha256Short } from './hash.js';
+
+const here = dirname(fileURLToPath(import.meta.url));
 
 const PORT = Number(process.env.PORT || 8420);
 const HOST = process.env.HOST || '0.0.0.0';
@@ -22,10 +27,11 @@ let assets = new Map();
 let state = null;
 let building = false;
 
-function bake(body, type) {
+async function bake(body, type) {
   const raw = Buffer.from(body);
   return {
     raw,
+    etag: `"${await sha256Short(body)}"`,
     // Max compression is affordable because it runs once per refresh cycle,
     // entirely off the request path.
     br: brotliCompressSync(raw, {
@@ -35,7 +41,6 @@ function bake(body, type) {
       },
     }),
     gz: gzipSync(raw, { level: 9 }),
-    etag: `"${createHash('sha1').update(raw).digest('base64url').slice(0, 22)}"`,
     type,
   };
 }
@@ -46,10 +51,7 @@ async function rebuild() {
   const t0 = performance.now();
   try {
     const next = await refreshAll();
-    next.sig = createHash('sha1')
-      .update(next.stories.map((s) => s.link).join('\n'))
-      .digest('base64url')
-      .slice(0, 16);
+    next.sig = await sha256Short(next.stories.map((s) => s.link).join('\n'), 16);
 
     const page = renderPage(next);
     const list = renderList(next);
@@ -66,10 +68,10 @@ async function rebuild() {
     });
 
     const fresh = new Map();
-    fresh.set('/', bake(page, 'text/html; charset=utf-8'));
-    fresh.set('/fragment/list', bake(list, 'text/html; charset=utf-8'));
-    fresh.set('/api/status', bake(status, 'application/json; charset=utf-8'));
-    fresh.set('/api/wire', bake(wire, 'application/json; charset=utf-8'));
+    fresh.set('/', await bake(page, 'text/html; charset=utf-8'));
+    fresh.set('/fragment/list', await bake(list, 'text/html; charset=utf-8'));
+    fresh.set('/api/status', await bake(status, 'application/json; charset=utf-8'));
+    fresh.set('/api/wire', await bake(wire, 'application/json; charset=utf-8'));
 
     assets = fresh;
     state = next;
@@ -94,16 +96,19 @@ function log(msg) {
 // Server
 // ---------------------------------------------------------------------------
 
-const CSP = [
-  "default-src 'none'",
-  "img-src https: data:",
-  `style-src ${INLINE_HASHES.css}`,
-  `script-src ${INLINE_HASHES.js}`,
-  "connect-src 'self'",
-  "base-uri 'none'",
-  "form-action 'none'",
-  "frame-ancestors 'none'",
-].join('; ');
+function csp() {
+  const h = cspHashes();
+  return [
+    "default-src 'none'",
+    "img-src https: data:",
+    `style-src ${h.css}`,
+    `script-src ${h.js}`,
+    "connect-src 'self'",
+    "base-uri 'none'",
+    "form-action 'none'",
+    "frame-ancestors 'none'",
+  ].join('; ');
+}
 
 const WARMING = Buffer.from(
   `<!doctype html><meta charset="utf-8"><title>NBA Wire — warming up</title>`
@@ -185,7 +190,7 @@ const server = createServer((req, res) => {
     vary: 'Accept-Encoding',
   };
   if (encoding) headers['content-encoding'] = encoding;
-  if (asset.type.startsWith('text/html')) headers['content-security-policy'] = CSP;
+  if (asset.type.startsWith('text/html')) headers['content-security-policy'] = csp();
 
   res.writeHead(200, headers);
   res.end(method === 'HEAD' ? undefined : body);
@@ -193,6 +198,12 @@ const server = createServer((req, res) => {
 
 server.keepAliveTimeout = 65_000;
 server.headersTimeout = 66_000;
+
+// Local/VPS entry: assets come off disk, so there is still no build step here.
+await configureAssets(
+  readFileSync(join(here, 'ui/app.css'), 'utf8'),
+  readFileSync(join(here, 'ui/app.js'), 'utf8'),
+);
 
 server.listen(PORT, HOST, () => {
   log(`NBA WIRE listening on http://localhost:${PORT}  (refresh every ${REFRESH_MS / 1000}s)`);

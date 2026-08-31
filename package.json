@@ -4,9 +4,22 @@
   "private": true,
   "type": "module",
   "description": "Blazing-fast NBA news wire. Mashes up every major NBA feed into one full-screen console.",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "start": "node src/server.js",
-    "dev": "node --watch src/server.js"
+    "dev": "node --watch src/server.js",
+    "build:assets": "node scripts/build-assets.mjs",
+    "cf:dev": "npm run build:assets && wrangler dev",
+    "cf:deploy": "npm run build:assets && wrangler deploy",
+    "cf:tail": "wrangler tail"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  },
+  "allowScripts": {
+    "esbuild@0.28.1": true,
+    "workerd@1.20260828.1": true
   }
 }

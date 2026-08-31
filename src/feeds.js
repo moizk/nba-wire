@@ -2,12 +2,15 @@ import { SOURCES } from './sources.js';
 import { parseFeed, decodeBody } from './parse.js';
 import { buildWire, trending } from './normalize.js';
 
-// Deliberately no User-Agent header.
+// An honest, descriptive User-Agent — measured against all 11 sources.
 //
-// This is counter-intuitive but measured: ESPN answers a browser UA with an
-// empty 202 (bot mitigation), and Reddit 429s any custom UA it doesn't know.
-// The default agent is the one string every source in the registry accepts.
+// The rule is narrower than "browser UAs are blocked": ESPN answers a *browser*
+// UA with an empty 202 (bot mitigation) and Reddit 429s one, but both accept a
+// plain identifying agent. Sending none is not an option either — Reddit 403s
+// it, which is what Workers do by default, unlike Node (which quietly sends
+// "node"). This one string returns 200 from every source in the registry.
 const FETCH_HEADERS = {
+  'user-agent': 'nbawire/1.0 (+https://nbawire.org)',
   accept: 'application/rss+xml, application/atom+xml, application/xml;q=0.9, text/xml;q=0.9, */*;q=0.5',
   'accept-language': 'en-US,en;q=0.9',
 };
@@ -50,7 +53,7 @@ async function fetchOne(source, now) {
     }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
-    const buf = Buffer.from(await res.arrayBuffer());
+    const buf = new Uint8Array(await res.arrayBuffer());
     if (!buf.length) throw new Error('empty body');
     const xml = decodeBody(buf, res.headers.get('content-type') || '');
     const entries = parseFeed(xml);

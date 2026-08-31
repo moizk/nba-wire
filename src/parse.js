@@ -198,26 +198,66 @@ export function parseFeed(xml) {
   return out;
 }
 
+// windows-1252's only divergence from ISO-8859-1: the 0x80-0x9F block, which
+// is where feeds hide curly quotes and dashes.
+const CP1252_HIGH = [
+  0x20ac, 0x0081, 0x201a, 0x0192, 0x201e, 0x2026, 0x2020, 0x2021,
+  0x02c6, 0x2030, 0x0160, 0x2039, 0x0152, 0x008d, 0x017d, 0x008f,
+  0x0090, 0x2018, 0x2019, 0x201c, 0x201d, 0x2022, 0x2013, 0x2014,
+  0x02dc, 0x2122, 0x0161, 0x203a, 0x0153, 0x009d, 0x017e, 0x0178,
+];
+
+/**
+ * Decode a single-byte legacy encoding by hand.
+ *
+ * Workers' TextDecoder only reliably implements UTF-8, so we cannot lean on it
+ * for the legacy charsets — and RealGM still serves ISO-8859-1, where getting
+ * this wrong turns every apostrophe into mojibake.
+ */
+function decodeSingleByte(bytes, windows1252) {
+  let out = '';
+  const CHUNK = 8192;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    const end = Math.min(i + CHUNK, bytes.length);
+    let part = '';
+    for (let j = i; j < end; j++) {
+      const b = bytes[j];
+      part += String.fromCharCode(
+        windows1252 && b >= 0x80 && b <= 0x9f ? CP1252_HIGH[b - 0x80] : b,
+      );
+    }
+    out += part;
+  }
+  return out;
+}
+
+const SINGLE_BYTE = /^(iso-?8859-?1|latin-?1|windows-?1252|cp-?1252|us-?ascii|ascii)$/;
+
 /**
  * Decode bytes using the charset the feed actually declares. RealGM still ships
  * ISO-8859-1, and mis-decoding it turns every apostrophe into mojibake.
  */
 export function decodeBody(buf, contentType = '') {
+  const bytes = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
+
   let charset = '';
   const ct = /charset=["']?([\w-]+)/i.exec(contentType);
   if (ct) charset = ct[1].toLowerCase();
 
   if (!charset) {
     // Sniff the XML declaration from the first bytes, which are ASCII-safe.
-    const head = Buffer.from(buf.buffer, buf.byteOffset, Math.min(buf.length, 200)).toString('latin1');
+    let head = '';
+    for (let i = 0; i < Math.min(bytes.length, 200); i++) head += String.fromCharCode(bytes[i]);
     const dec = /encoding=["']([\w-]+)["']/i.exec(head);
     if (dec) charset = dec[1].toLowerCase();
   }
   if (!charset || charset === 'utf8') charset = 'utf-8';
 
+  if (SINGLE_BYTE.test(charset)) return decodeSingleByte(bytes, /1252/.test(charset));
+
   try {
-    return new TextDecoder(charset, { fatal: false }).decode(buf);
+    return new TextDecoder(charset, { fatal: false }).decode(bytes);
   } catch {
-    return new TextDecoder('utf-8', { fatal: false }).decode(buf);
+    return new TextDecoder('utf-8', { fatal: false }).decode(bytes);
   }
 }

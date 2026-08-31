@@ -1,24 +1,32 @@
-import { readFileSync } from 'node:fs';
-import { createHash } from 'node:crypto';
-import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
+import { sha256Base64 } from './hash.js';
 import { SOURCES } from './sources.js';
 import { TEAMS } from './teams.js';
 
-const here = dirname(fileURLToPath(import.meta.url));
+// The CSS and client script are injected rather than read from disk, so this
+// module stays runtime-agnostic: the Node entry point loads them with fs, the
+// Worker imports them as a generated module.
+let CSS = '';
+let JS = '';
+let HASHES = { css: "'none'", js: "'none'" };
 
-// CSS and client JS are read once at boot and inlined. Inlining costs a few KB
-// of HTML but removes two round trips, and the whole document compresses as a
-// single Brotli stream — a clear win for a page this size.
-const CSS = readFileSync(join(here, 'ui/app.css'), 'utf8');
-const JS = readFileSync(join(here, 'ui/app.js'), 'utf8');
+/**
+ * Install the inlined assets and precompute their CSP hashes. Must be awaited
+ * once before the first render.
+ */
+export async function configureAssets(css, js) {
+  CSS = css;
+  JS = js;
+  HASHES = {
+    css: `'sha256-${await sha256Base64(css)}'`,
+    js: `'sha256-${await sha256Base64(js)}'`,
+  };
+}
 
-// Exact hashes of the inlined blocks, so the CSP can allow precisely these two
-// and nothing else — no 'unsafe-inline' anywhere.
-export const INLINE_HASHES = {
-  css: `'sha256-${createHash('sha256').update(CSS).digest('base64')}'`,
-  js: `'sha256-${createHash('sha256').update(JS).digest('base64')}'`,
-};
+/** Exact hashes of the inlined blocks, so the CSP can allow precisely these
+ *  two and nothing else — no 'unsafe-inline' anywhere. */
+export function cspHashes() {
+  return HASHES;
+}
 
 const AMP = /&/g, LT = /</g, GT = />/g, QUOT = /"/g;
 export function esc(s) {

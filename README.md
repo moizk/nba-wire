@@ -11,7 +11,8 @@ Full-screen, three panes, keyboard-driven.
 npm start          # http://localhost:8420
 ```
 
-Node 20+. **Zero runtime dependencies** — no framework, no bundler, no build step.
+Node 20+. **Zero runtime dependencies** — no framework, no bundler, no build step. Runs
+either as a Node server or on Cloudflare Workers; see [Deploying](#deploying).
 
 ---
 
@@ -159,8 +160,11 @@ health row and dedupe weighting. Nothing else to touch.
 
 Two source quirks worth knowing, both discovered by measurement:
 
-- **No `User-Agent` is sent.** ESPN answers a browser UA with an empty `202`, and Reddit
-  `429`s any custom UA. The default agent is the one string all 11 accept.
+- **A plain descriptive `User-Agent` is sent** (`nbawire/1.0 (+https://nbawire.org)`).
+  The rule is narrower than "browser UAs get blocked": ESPN answers a *browser* UA with an
+  empty `202` and Reddit `429`s one, but both accept an honest identifying agent. Sending
+  none is not an option either — Reddit `403`s it, which is exactly what Workers do by
+  default, where Node quietly sends `node`. This one string returns `200` from all 11.
 - **Reddit polls every 5 minutes** (`intervalMs`), not every cycle, because it rate-limits
   tight pollers.
 
@@ -178,28 +182,89 @@ The client polls `/api/status` every 45 s and on tab focus. When the signature c
 fetches `/fragment/list` and offers a **New wire** pill rather than yanking the list out
 from under you.
 
+## Deploying
+
+Because every route is precomputed on a timer, this deploys as a **Cloudflare Worker**:
+a Cron Trigger rebuilds the wire and writes it to KV, and the fetch handler only reads KV
+and returns bytes. Nothing renders per request.
+
+```bash
+npx wrangler login
+npx wrangler kv namespace create WIRE   # paste the printed id into wrangler.toml
+npm run cf:deploy
+```
+
+Then attach the domain: put the site's nameservers on Cloudflare, uncomment the `routes`
+block in `wrangler.toml`, and deploy again. `npm run cf:tail` streams live logs.
+
+The first request after a deploy returns a "warming up" page and kicks off a build, so you
+don't have to wait for the first cron tick.
+
+### Why Workers, measured
+
+The refresh splits into two very different costs:
+
+| stage | CPU |
+|---|---|
+| parse 11 feeds (1.4MB XML) | 11ms |
+| clean, de-duplicate, cluster, rank | 9ms |
+| render HTML | 0.6ms |
+| **the actual work** | **~22ms** |
+| brotli quality 11 | 203ms |
+
+So **the Worker does not compress** — Cloudflare compresses at the edge, and doing it
+in-process would have been 90% of the CPU budget for no gain. The Node server keeps its
+precompression, which is still right when it *is* the origin.
+
+Budget notes: serving is a KV read and is nowhere near any limit, but the ~22ms rebuild
+exceeds the free plan's 10ms CPU per invocation, so the cron wants Workers Paid ($5/mo).
+KV reads use `cacheTtl: 60` to keep hot routes in the colo cache. Each run writes 4 keys,
+so on the free plan use `*/10` rather than `*/5` (1,000 writes/day cap).
+
+A build that produces zero stories is never published — if every feed fails, the previous
+wire keeps serving.
+
+### Running it as a plain server instead
+
+`npm start` still serves everything from Node with brotli precompression, which is what you
+want on a VPS. Put Cloudflare in front for TLS and set
+`cache-control: public, max-age=0, s-maxage=60, stale-while-revalidate=120` so the edge
+absorbs the traffic.
+
 ## Config
 
 | env | default | |
 |---|---|---|
-| `PORT` | `8420` | |
-| `HOST` | `0.0.0.0` | |
-| `REFRESH_MS` | `90000` | feed poll interval |
+| `PORT` | `8420` | Node server only |
+| `HOST` | `0.0.0.0` | Node server only |
+| `REFRESH_MS` | `90000` | Node poll interval; on Workers the cron in `wrangler.toml` sets this |
 
 ## Layout
 
+Everything under `src/` except `server.js` is runtime-agnostic — no `node:` imports, no
+`Buffer` — so the same pipeline runs under Node and under Workers.
+
 ```
 src/
-  server.js      HTTP, precompressed response cache, ETag/304, CSP
+  server.js      Node entry: HTTP, brotli/gzip precompression, ETag/304, CSP
   feeds.js       parallel polling, per-source intervals, conditional requests
   parse.js       RSS + Atom reader, entity/CDATA/charset handling
   normalize.js   cleaning, de-duplication, clustering, ranking
-  teams.js       30-team detection, mixed-sport filtering
-  render.js      HTML rendering, inlining, CSP hashes
+  teams.js       30-team detection, mixed-sport and WNBA filtering
+  render.js      HTML rendering, asset inlining, CSP hashes
+  hash.js        Web Crypto helpers (identical in Node and Workers)
   sources.js     the feed registry — the only file you need to edit
   ui/app.css     the flat white shell
   ui/app.js      filtering, keyboard, live updates
+worker/
+  index.js       Workers entry: Cron Trigger rebuild + KV-backed fetch handler
+scripts/
+  build-assets.mjs   bakes ui/app.{css,js} into a module for the Worker
 ```
+
+Local development has no build step: the Node server reads the CSS and client script off
+disk. Only `npm run cf:deploy` bakes them into `worker/assets.generated.js`, because a
+Worker has no filesystem.
 
 ## Security
 
