@@ -1,6 +1,7 @@
 import { SOURCES } from './sources.js';
 import { parseFeed, decodeBody } from './parse.js';
 import { buildWire, trending } from './normalize.js';
+import { refreshGames } from './games.js';
 
 // An honest, descriptive User-Agent — measured against all 11 sources.
 //
@@ -83,20 +84,25 @@ async function fetchOne(source, now) {
 }
 
 /**
- * Poll every source in parallel and fold the results into a ranked wire.
+ * Poll every source in parallel and fold the results into a ranked wire,
+ * alongside the games panel's scoreboards.
  * A failing feed degrades to a health-panel warning, never an exception: the
  * wire must render if any source answers.
  */
 export async function refreshAll() {
   const started = performance.now();
   const now = Date.now();
-  const results = await Promise.all(SOURCES.map((s) => fetchOne(s, now)));
+  const [results, games] = await Promise.all([
+    Promise.all(SOURCES.map((s) => fetchOne(s, now))),
+    refreshGames(now),
+  ]);
 
   const stories = buildWire(results, now);
 
   return {
     stories,
     trending: trending(stories),
+    games,
     health: results.map((r) => ({
       id: r.source.id,
       name: r.source.name,

@@ -19,6 +19,11 @@
   const srcToggle = $('#srctoggle');
   const srcBody = $('#srcbody');
   const srcState = $('#srcstate');
+  const gamesEl = $('#games');
+  const dLabel  = $('#dlabel');
+  const dPrev   = $('#dprev');
+  const dNext   = $('#dnext');
+  const gCount  = $('#gcount');
 
   let rows = [];
   let visible = [];
@@ -157,6 +162,45 @@
     apply();
   });
 
+  /* --------------------------------------------------------------- games */
+
+  // The selected day is held by date, not position, so it survives a swap-in
+  // and the 6am rollover that shifts every day along by one.
+  let day = gamesEl.dataset.today;
+
+  function showDay(date) {
+    const days = $$('.day', gamesEl);
+    if (!days.length) return;
+    let i = days.findIndex((d) => d.dataset.date === date);
+    if (i < 0) i = Math.max(0, days.findIndex((d) => d.dataset.date === gamesEl.dataset.today));
+    const cur = days[i];
+    day = cur.dataset.date;
+    for (const d of days) d.hidden = d !== cur;
+    dLabel.innerHTML = '';
+    const b = document.createElement('b');
+    b.textContent = cur.dataset.label;
+    dLabel.append(b, ' ' + cur.dataset.sub);
+    const n = +cur.dataset.n;
+    gCount.textContent = n === 1 ? '1 game' : `${n} games`;
+    dPrev.disabled = i === 0;
+    dNext.disabled = i === days.length - 1;
+  }
+
+  function stepDay(delta) {
+    const days = $$('.day', gamesEl);
+    const i = days.findIndex((d) => d.dataset.date === day) + delta;
+    if (days[i]) { showDay(days[i].dataset.date); gamesEl.scrollTop = 0; }
+  }
+
+  dPrev.addEventListener('click', () => stepDay(-1));
+  dNext.addEventListener('click', () => stepDay(1));
+
+  // Tip times arrive in ET; show them in the viewer's own zone.
+  const TIP = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' });
+  function localTips() {
+    for (const el of $$('[data-tip]', gamesEl)) el.textContent = TIP.format(+el.dataset.tip);
+  }
+
   /* ------------------------------------------------------------ keyboard */
 
   document.addEventListener('keydown', (e) => {
@@ -194,6 +238,8 @@
       case 'G': e.preventDefault(); if (visible.length) select(rows.indexOf(visible[visible.length - 1])); break;
       case 'r': e.preventDefault(); check(true); break;
       case 's': e.preventDefault(); setPanel(srcBody.hidden); break;
+      case '[': e.preventDefault(); stepDay(-1); break;
+      case ']': e.preventDefault(); stepDay(1); break;
       case '0': e.preventDefault(); filters.source = filters.team = ''; syncPressed(); apply(); break;
       default: {
         // 1–9 jump straight to a source filter, in rail order.
@@ -231,24 +277,43 @@
 
   /* ---------------------------------------------------------- live update */
 
+  let liveEtag = document.body.dataset.liveEtag || '';
+  // The list currently on screen, or queued behind the pill.
   let listEtag = document.body.dataset.listEtag || '';
   let pendingHtml = null;
 
   /**
-   * One conditional request replaces the old poll-then-fetch pair: an unchanged
-   * wire costs a 304 with no body, and a changed one returns the fragment we
-   * were going to ask for anyway.
+   * One conditional request covers both moving parts: an unchanged build costs
+   * a 304 with no body. Scores swap in at once — nobody is reading a score
+   * mid-sentence — while a new story list waits behind the pill rather than
+   * moving the wire out from under the reader.
    */
   async function check(force = false) {
     try {
       const headers = {};
-      if (listEtag && !force) headers['if-none-match'] = listEtag;
-      const r = await fetch('/fragment/list', { headers, cache: 'no-store' });
+      if (liveEtag && !force) headers['if-none-match'] = liveEtag;
+      const r = await fetch('/fragment/live', { headers, cache: 'no-store' });
       if (r.status === 304) return;
       if (!r.ok) return;
 
-      pendingHtml = await r.text();
-      listEtag = r.headers.get('etag') || listEtag;
+      const live = await r.json();
+      liveEtag = r.headers.get('etag') || liveEtag;
+
+      if (typeof live.games === 'string' && live.games) {
+        const top = gamesEl.scrollTop;
+        // Someone watching today keeps watching today across the rollover;
+        // someone who stepped to another day stays on that date.
+        const onToday = day === gamesEl.dataset.today;
+        if (live.today) gamesEl.dataset.today = live.today;
+        gamesEl.innerHTML = live.games;
+        localTips();
+        showDay(onToday ? gamesEl.dataset.today : day);
+        gamesEl.scrollTop = top;
+      }
+
+      if (live.v === listEtag && !force) return;
+      listEtag = live.v;
+      pendingHtml = live.list;
       if (force) return swapIn();
 
       // The pill's count comes from the markup we just received.
@@ -279,6 +344,8 @@
   indexRows();
   apply();
   stampAll();
+  localTips();
+  showDay(day);
   setInterval(stampAll, 30_000);
   setInterval(() => check(false), 45_000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) check(false); });

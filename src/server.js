@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { brotliCompressSync, gzipSync, constants as Z } from 'node:zlib';
 import { refreshAll } from './feeds.js';
-import { renderPage, renderList, configureAssets, cspHashes } from './render.js';
+import { renderPage, renderList, renderLive, configureAssets, cspHashes } from './render.js';
 import { sha256Short } from './hash.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -51,16 +51,20 @@ async function rebuild() {
   const t0 = performance.now();
   try {
     const next = await refreshAll();
-    next.sig = await sha256Short(next.stories.map((s) => s.link).join('\n'), 16);
+    next.sig = await sha256Short(
+      next.stories.map((s) => s.link).join('\n') + JSON.stringify(next.games), 16);
 
     const list = renderList(next);
     next.listEtag = `"${await sha256Short(list)}"`;
+    const live = renderLive(next, list, next.listEtag);
+    next.liveEtag = `"${await sha256Short(live)}"`;
     const page = renderPage(next);
     const status = JSON.stringify({ sig: next.sig, builtAt: next.builtAt, stories: next.counts.stories });
     const wire = JSON.stringify({
       builtAt: next.builtAt,
       counts: next.counts,
       health: next.health,
+      games: next.games,
       stories: next.stories.map((s) => ({
         title: s.title, link: s.link, summary: s.summary, image: s.image,
         published: s.published, source: s.source.id, sourceName: s.source.name,
@@ -70,9 +74,9 @@ async function rebuild() {
 
     const fresh = new Map();
     fresh.set('/', await bake(page, 'text/html; charset=utf-8'));
-    const listAsset = await bake(list, 'text/html; charset=utf-8');
-    listAsset.etag = next.listEtag;   // must match what the page advertises
-    fresh.set('/fragment/list', listAsset);
+    const liveAsset = await bake(live, 'application/json; charset=utf-8');
+    liveAsset.etag = next.liveEtag;   // must match what the page advertises
+    fresh.set('/fragment/live', liveAsset);
     fresh.set('/api/status', await bake(status, 'application/json; charset=utf-8'));
     fresh.set('/api/wire', await bake(wire, 'application/json; charset=utf-8'));
 

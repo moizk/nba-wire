@@ -1,7 +1,8 @@
 # NBA WIRE
 
 Every NBA feed on one screen. ~380 items pulled from 11 outlets each cycle, de-duplicated
-into ~270 ranked stories, rendered once, and served precompressed from memory.
+into ~270 ranked stories, rendered once, and served precompressed from memory. Today's games,
+with live scores, sit in the middle column.
 
 **Stormtrooper shell**: flat white surfaces throughout, hairline seams, no gradients or
 drop shadows. The only black left is the wordmark badge and whatever is actively selected.
@@ -103,10 +104,34 @@ is rejected rather than accepted as a basketball signal — matched by league na
 
 Stories carried by two or more independent outlets surface in **Trending**.
 
+## Games
+
+The middle column is the day's slate: tip time (in the viewer's own zone), national TV,
+and once a game starts the score and clock, with the winner bolded at the final. A date
+switcher in its cap steps one day either way — **yesterday, today, tomorrow** — with the
+arrows or `[` / `]`. All three days are rendered into the page, so switching costs no request.
+
+Data comes from ESPN's per-day scoreboard (`src/games.js`), fetched alongside the feeds on
+every cycle. This is the Worker-shaped version of the old
+[nba-schedule-2025-26](https://github.com/moizk/nba-schedule-2025-26) Ruby scraper. That
+project pulled NBA.com's whole-season `scheduleLeagueV2.json` once and wrote it to disk.
+Here each cycle fetches three days, ~10 kB of JSON, which also carries live scores. NBA's
+CDN was dropped as a source because it 403s non-browser clients.
+
+- **NBA days are Eastern days**, and "today" rolls over at **6am ET**, so a late West Coast
+  game still reads as today until it ends.
+- **ESPN's edge 403s any User-Agent containing a URL**, including the one every RSS feed
+  accepts, so scores are fetched as plain `nbawire/1.0`.
+- **Logos** come through ESPN's resizer at 48px (~3 kB) instead of the 80 kB originals.
+- A failed day keeps its last good copy and shows amber as *ESPN Scores* in Feed Health.
+
+The client polls one route for both moving parts. Scores swap in place; a new story list
+still waits behind the **New wire** pill.
+
 ## Interface notes
 
 The wire owns the left column and takes all the width it can — it is the product. The
-right column stacks **Sources**, **Trending** and **Feed Health**, with Sources collapsed
+games take a fixed middle column, and the right column stacks **Sources**, **Trending** and **Feed Health**, with Sources collapsed
 by default so it costs a 33px cap bar until you want it. Opening it is remembered in
 `localStorage`; `s` toggles it, and `1`–`9` open it so a shortcut's effect is visible.
 While it is shut, any active filter shows as a dark badge on its cap, so you can never end
@@ -137,6 +162,7 @@ background, so "low contrast" stays readable at 9.5px:
 | `↵` / `o` | open in a new tab |
 | `/` | search |
 | `1`–`9` | filter by source (opens the panel) |
+| `[` / `]` | previous / next day of games |
 | `s` | show/hide sources |
 | `0` | clear filters |
 | `g` / `G` | top / bottom |
@@ -173,14 +199,15 @@ Two source quirks worth knowing, both discovered by measurement:
 | | |
 |---|---|
 | `/` | the console |
-| `/api/wire` | full ranked wire as JSON |
-| `/api/status` | `{sig, builtAt, stories}` — what the client polls |
-| `/fragment/list` | the story list, for in-place updates |
+| `/api/wire` | full ranked wire, plus the three days of games, as JSON |
+| `/api/status` | `{sig, builtAt, stories}` |
+| `/fragment/live` | `{v, list, games, today}`: the story list and games panel, for in-place updates |
 | `/healthz` | liveness + per-feed status |
 
-The client polls `/api/status` every 45 s and on tab focus. When the signature changes it
-fetches `/fragment/list` and offers a **New wire** pill rather than yanking the list out
-from under you.
+The client sends a conditional request for `/fragment/live` every 45 s and on tab focus,
+so an unchanged build costs a `304`. Games are replaced right away. The list is offered
+through the **New wire** pill only when `v`, the list's own ETag, has changed, so a score
+update alone never pops the pill.
 
 ## Deploying
 
@@ -218,8 +245,11 @@ precompression, which is still right when it *is* the origin.
 
 Budget notes: serving is a KV read and is nowhere near any limit, but the ~22ms rebuild
 exceeds the free plan's 10ms CPU per invocation, so the cron wants Workers Paid ($5/mo).
-KV reads use `cacheTtl: 60` to keep hot routes in the colo cache. Each run writes 4 keys,
-so on the free plan use `*/10` rather than `*/5` (1,000 writes/day cap).
+KV reads use `cacheTtl: 60` to keep hot routes in the colo cache. A run that changes
+anything writes 3 keys (`page`, `live`, `wire`); the games ride inside `live` and `wire`
+rather than taking a fourth key, which would push `*/5` past the free plan's 1,000
+writes/day. Scores are part of the build signature, so on game nights almost every cycle
+writes.
 
 A build that produces zero stories is never published — if every feed fails, the previous
 wire keeps serving.
@@ -248,6 +278,7 @@ Everything under `src/` except `server.js` is runtime-agnostic — no `node:` im
 src/
   server.js      Node entry: HTTP, brotli/gzip precompression, ETag/304, CSP
   feeds.js       parallel polling, per-source intervals, conditional requests
+  games.js       ESPN scoreboards for yesterday/today/tomorrow
   parse.js       RSS + Atom reader, entity/CDATA/charset handling
   normalize.js   cleaning, de-duplication, clustering, ranking
   teams.js       30-team detection, mixed-sport and WNBA filtering
@@ -255,7 +286,7 @@ src/
   hash.js        Web Crypto helpers (identical in Node and Workers)
   sources.js     the feed registry — the only file you need to edit
   ui/app.css     the flat white shell
-  ui/app.js      filtering, keyboard, live updates
+  ui/app.js      filtering, keyboard, date switcher, live updates
 worker/
   index.js       Workers entry: Cron Trigger rebuild + KV-backed fetch handler
 scripts/

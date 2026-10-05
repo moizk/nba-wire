@@ -1,20 +1,22 @@
 import { refreshAll } from '../src/feeds.js';
-import { renderPage, renderList, configureAssets, cspHashes } from '../src/render.js';
+import { renderPage, renderList, renderLive, configureAssets, cspHashes } from '../src/render.js';
 import { sha256Short } from '../src/hash.js';
 import { CSS, JS } from './assets.generated.js';
 
 // Bump to invalidate every cached route at once.
 const V = 'v1';
 
-// Only three keys are stored. `/api/status` is derived from the `list` key's
+// Only three keys are stored. `/api/status` is derived from the `live` key's
 // metadata rather than being a key of its own, because KV quota is counted per
 // key written per cycle, and the free plan allows 1,000 writes/day:
 //   4 keys x 288 cycles (*/5) = 1,152/day  -> over
 //   3 keys x 288 cycles       =   864/day  -> under, and cycles that change
 //                                             nothing write zero.
+// The games panel rides inside `live` next to the story list for the same
+// reason: a key of its own would be the fourth.
 const ROUTES = new Map([
   ['/', { key: 'page', type: 'text/html; charset=utf-8' }],
-  ['/fragment/list', { key: 'list', type: 'text/html; charset=utf-8' }],
+  ['/fragment/live', { key: 'live', type: 'application/json; charset=utf-8' }],
   ['/api/wire', { key: 'wire', type: 'application/json; charset=utf-8' }],
 ]);
 
@@ -66,7 +68,7 @@ function securityHeaders(type) {
 }
 
 /**
- * Poll every feed, rebuild all four routes and store them in KV.
+ * Poll every feed and scoreboard, rebuild every route and store them in KV.
  *
  * No compression happens here: Cloudflare compresses at the edge, and doing it
  * ourselves was measured at 203ms of CPU per cycle against 22ms for the actual
@@ -80,7 +82,10 @@ async function build(env) {
   // already in KV until the next run.
   if (!state.stories.length) return { ok: false, reason: 'no stories built' };
 
-  state.sig = await sha256Short(state.stories.map((s) => s.link).join('\n'), 16);
+  // Scores are part of the signature, so a cycle where only a score moved
+  // still republishes.
+  state.sig = await sha256Short(
+    state.stories.map((s) => s.link).join('\n') + JSON.stringify(state.games), 16);
 
   // list() returns metadata without the value, so checking whether anything
   // changed costs a list operation rather than a 225kB read.
@@ -89,18 +94,22 @@ async function build(env) {
     return { ok: true, skipped: 'unchanged', stories: state.counts.stories };
   }
 
-  // The fragment's ETag is embedded in the page so the client can send a
-  // conditional request on its first poll; it must match what we store.
+  // Both ETags are embedded in the page: the live one so the client's first
+  // poll can be conditional, the list one so it can tell a new wire from a
+  // score update. They must match what we store.
   const list = renderList(state);
   state.listEtag = `"${await sha256Short(list)}"`;
+  const live = renderLive(state, list, state.listEtag);
+  state.liveEtag = `"${await sha256Short(live)}"`;
 
   const payloads = [
     ['page', renderPage(state), 'text/html; charset=utf-8'],
-    ['list', list, 'text/html; charset=utf-8'],
+    ['live', live, 'application/json; charset=utf-8'],
     ['wire', JSON.stringify({
       builtAt: state.builtAt,
       counts: state.counts,
       health: state.health,
+      games: state.games,
       stories: state.stories.map((s) => ({
         title: s.title, link: s.link, summary: s.summary, image: s.image,
         published: s.published, source: s.source.id, sourceName: s.source.name,
@@ -110,7 +119,7 @@ async function build(env) {
   ];
 
   await Promise.all(payloads.map(async ([key, body, type]) => {
-    const etag = key === 'list' ? state.listEtag : `"${await sha256Short(body)}"`;
+    const etag = key === 'live' ? state.liveEtag : `"${await sha256Short(body)}"`;
     await env.WIRE.put(`${V}:${key}`, body, {
       metadata: {
         etag, type, builtAt: state.builtAt,
@@ -151,7 +160,7 @@ export default {
     // Both of these want the build's metadata, not its content. list() hands
     // back metadata without transferring any value.
     if (url.pathname === '/healthz' || url.pathname === '/api/status') {
-      const found = await env.WIRE.list({ prefix: `${V}:list`, limit: 1 });
+      const found = await env.WIRE.list({ prefix: `${V}:live`, limit: 1 });
       const m = found.keys?.[0]?.metadata;
       const body = url.pathname === '/api/status'
         ? JSON.stringify({ sig: m?.sig ?? null, builtAt: m?.builtAt ?? null, stories: m?.stories ?? null })

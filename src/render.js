@@ -110,6 +110,80 @@ export function renderList(state) {
   return html;
 }
 
+/* ------------------------------------------------------------------ games */
+
+const DAY_FMT = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', weekday: 'short', month: 'short', day: 'numeric' });
+const TIP_FMT = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit' });
+
+// ESPN serves its logos at 500px; the resizer hands back a 3kB 48px copy
+// instead of an 80kB original for a glyph drawn at 18px.
+function logoUrl(u) {
+  const m = /^https:\/\/a\.espncdn\.com(\/i\/teamlogos\/[\w/.-]+\.png)$/.exec(u || '');
+  return m ? esc(`https://a.espncdn.com/combiner/i?img=${m[1]}&w=48&h=48`) : safeUrl(u);
+}
+
+function gameSide(t, g) {
+  const decided = g.state === 'post';
+  const cls = decided ? (t.winner ? ' win' : ' lose') : '';
+  return `<span class="tm${cls}">`
+    + (t.logo ? `<img class="logo" src="${logoUrl(t.logo)}" alt="" width="18" height="18" loading="lazy" decoding="async">` : '<span class="logo"></span>')
+    + `<span class="nm">${esc(t.name)}</span>`
+    // 0-0 says nothing, and it's every record until opening night.
+    + (t.record && t.record !== '0-0' ? `<span class="rec">${esc(t.record)}</span>` : '')
+    + `<span class="sc">${g.state === 'pre' ? '' : esc(t.score)}</span>`
+    + `</span>`;
+}
+
+function gameStatus(g) {
+  if (g.state === 'in') return `<span class="st on"><span class="dot"></span>${esc(g.detail)}</span>`;
+  if (g.state === 'post') return `<span class="st">${esc(g.detail || 'Final')}</span>`;
+  // Postponements and the like arrive as a pre-game state with a word, not a time.
+  if (g.tbd || /postponed|canceled|cancelled|delayed|suspended/i.test(g.detail)) {
+    return `<span class="st">${esc(g.tbd ? 'TBD' : g.detail)}</span>`;
+  }
+  // Rendered in ET; the client rewrites it to the viewer's local time.
+  return `<span class="st"><i data-tip="${g.start}">${TIP_FMT.format(g.start)} ET</i></span>`;
+}
+
+function game(g) {
+  const chips = g.tv.map((n) => `<span class="chip tv">${esc(n)}</span>`).join('')
+    + (g.note ? `<span class="chip">${esc(g.note)}</span>` : '');
+  const tag = g.link ? 'a' : 'div';
+  const href = g.link ? ` href="${safeUrl(g.link)}" target="_blank" rel="noopener noreferrer"` : '';
+  return `<${tag} class="game ${g.state}"${href}${g.venue ? ` title="${esc(g.venue)}"` : ''}>`
+    + gameSide(g.away, g)
+    + gameSide(g.home, g)
+    + gameStatus(g)
+    + (chips ? `<span class="meta">${chips}</span>` : '')
+    + `</${tag}>`;
+}
+
+/** Every day in the switcher's reach, today visible. Switching days only
+ *  toggles `hidden`, so it costs no request. */
+export function renderGames(state) {
+  const g = state.games;
+  if (!g) return '';
+  let html = '';
+  for (const d of g.days) {
+    const n = d.games.length;
+    const sub = DAY_FMT.format(Date.parse(`${d.date}T00:00:00Z`));
+    html += `<div class="day" data-date="${d.date}" data-label="${esc(d.label)}" data-sub="${esc(sub)}"`
+      + ` data-n="${n}"${d.date === g.today ? '' : ' hidden'}>`;
+    if (!d.ok) html += '<div class="empty"><b>Scores unavailable</b>ESPN didn’t answer. Retrying next cycle.</div>';
+    else if (!n) html += '<div class="empty"><b>No games</b>Nothing on the schedule.</div>';
+    else for (const x of d.games) html += game(x);
+    html += '</div>';
+  }
+  return html;
+}
+
+/** What the client polls: the list and the games, one request between them.
+ *  `v` is the list's own ETag, so a score change alone doesn't offer a
+ *  "New wire" the list doesn't have. */
+export function renderLive(state, list, listEtag) {
+  return JSON.stringify({ v: listEtag, list, games: renderGames(state), today: state.games?.today || '' });
+}
+
 function railSources(state) {
   const health = new Map(state.health.map((h) => [h.id, h]));
   const counts = new Map();
@@ -175,11 +249,20 @@ function healthPanel(state) {
       + `<span>${esc(h.name)}</span>`
       + `<span class="ms">${note}</span></div>`;
   }
+  const g = state.games?.health;
+  if (g) {
+    const cls = g.ok ? '' : g.stale ? 'warn' : 'dead';
+    const note = g.ok ? `${g.count} games · ${g.ms}ms` : `${g.stale ? 'stale · ' : ''}${esc(g.error || 'down')}`;
+    html += `<div class="hrow"><span class="dot ${cls}"></span><span>${esc(g.name)}</span><span class="ms">${note}</span></div>`;
+  }
   return html;
 }
 
 const CHEVRON = '<svg class="chev" viewBox="0 0 12 12" width="9" height="9" aria-hidden="true">'
   + '<path d="M4 2.5 8 6l-4 3.5" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+const CHEV_L = '<svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true"><path d="M7.5 2.5 4 6l3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const CHEV_R = '<svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true"><path d="M4.5 2.5 8 6l-3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
 const SEARCH_ICON = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14"/></svg>';
 
@@ -200,7 +283,7 @@ export function renderPage(state) {
 <link rel="icon" href="${FAVICON}">
 <style>${CSS}</style>
 </head>
-<body data-sig="${esc(state.sig)}" data-list-etag="${esc(state.listEtag || '')}">
+<body data-sig="${esc(state.sig)}" data-list-etag="${esc(state.listEtag || '')}" data-live-etag="${esc(state.liveEtag || '')}">
 <div class="shell">
 
   <header class="nav">
@@ -223,6 +306,16 @@ export function renderPage(state) {
         <div class="empty" id="emptystate" hidden><b>Nothing matches</b>Try a different search, or press <kbd>0</kbd> to clear filters.</div>
       </div>
     </main>
+
+    <section class="plate gamespanel">
+      <div class="cap gcap">
+        <button class="dnav" id="dprev" type="button" aria-label="Previous day" title="Previous day ([)">${CHEV_L}</button>
+        <span class="dlabel" id="dlabel" aria-live="polite"><b>Today</b></span>
+        <button class="dnav" id="dnext" type="button" aria-label="Next day" title="Next day (])">${CHEV_R}</button>
+        <span class="n" id="gcount"></span>
+      </div>
+      <div class="games scroll" id="games" data-today="${esc(state.games?.today || '')}">${renderGames(state)}</div>
+    </section>
 
     <div class="side">
 
@@ -261,6 +354,7 @@ export function renderPage(state) {
     <span class="hint"><kbd>/</kbd>search</span>
     <span class="hint"><kbd>1</kbd>–<kbd>9</kbd>source</span>
     <span class="hint"><kbd>0</kbd>clear</span>
+    <span class="hint"><kbd>[</kbd><kbd>]</kbd>day</span>
     <span class="hint"><kbd>s</kbd>sources</span>
     <span class="hint"><kbd>r</kbd>refresh</span>
     <span class="grow"></span>
