@@ -160,3 +160,55 @@ export function isWomensBasketball(item) {
   // there — a team nickname in body text is too easily a coincidence.
   return !!item.summary && WNBA_LEAGUE.test(item.summary);
 }
+
+// ---------------------------------------------------------------------------
+// Basketball, but not the NBA
+// ---------------------------------------------------------------------------
+//
+// TalkBasket and RealGM cover world basketball, so EuroLeague roster moves and
+// FIBA qualifiers arrive in the same feeds as NBA news. They read as a different
+// sport entirely on an NBA wire — "Bosna replaces Monaco in the EuroCup" is not
+// what anyone came here for.
+//
+// The distinction that matters is not the competition but whether an NBA club is
+// in the frame: "Nuggets star Nikola Jokic plays through illness on FIBA duty"
+// is NBA news; "Giannis-less Greece defeats Spain" is not.
+
+const INTL_COMP = new RegExp('\\b(' + [
+  'euroleague', 'eurocup', 'eurobasket', 'basketball champions league', 'bcl',
+  'fiba', 'aba league', 'adriatic league', 'vtb', 'liga acb', 'acb',
+  'lnb pro', 'nationale masculine', 'nm1', 'lega basket', 'greek basket league',
+  'world cup qualifier', 'world cup qualifiers', 'world cup qualifying',
+  'olympic qualifier', 'olympic qualifiers', 'afrobasket', 'asia cup',
+  'national team', 'euroleague basketball',
+].join('|') + ')\\b', 'i');
+
+// Matched against the headline and URL only — the club is the story's subject
+// there, whereas a passing mention in body text usually is not.
+const INTL_CLUB = new RegExp('\\b(' + [
+  'real madrid', 'barcelona', 'partizan', 'crvena zvezda', 'red star belgrade',
+  'zalgiris', 'panathinaikos', 'olympiacos', 'olympiakos', 'fenerbahce',
+  'fenerbahçe', 'maccabi', 'anadolu efes', 'baskonia', 'valencia basket',
+  'virtus bologna', 'olimpia milano', 'asvel', 'alba berlin', 'bayern munich',
+  'zenit', 'cska', 'hapoel', 'bosna', 'monaco', 'unicaja', 'joventut',
+  'buducnost', 'cedevita', 'paris basketball', 'dubai bc',
+].join('|') + ')\\b', 'i');
+
+/** Non-NBA basketball: European club ball and international competition. */
+export function isNonNbaBasketball(item) {
+  const link = item.link || '';
+  if (NBA_PATH.test(link)) return false;
+
+  const slug = link.replace(/[-_/.]+/g, ' ');
+  const headline = `${item.title} ${slug}`;
+  const all = `${item.title} ${(item.categories || []).join(' ')} ${item.summary || ''}`;
+
+  const international = INTL_COMP.test(all) || INTL_COMP.test(slug) || INTL_CLUB.test(headline);
+  if (!international) return false;
+
+  // An NBA club anywhere in the story keeps it: that is a player on national
+  // duty, which is NBA news. Cities count here as well as nicknames — this is
+  // the permissive direction, and "Portland would not clear him to play" is a
+  // Blazers story even though it never says Blazers.
+  return detectTeams(all).length === 0;
+}

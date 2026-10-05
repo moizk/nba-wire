@@ -25,6 +25,22 @@ const ensureAssets = () => (assetsReady ??= configureAssets(CSS, JS));
 // Guards against a burst of cold requests each kicking off its own rebuild.
 let building = false;
 
+/**
+ * RFC 9110 weak comparison for If-None-Match.
+ *
+ * Cloudflare rewrites our strong ETag to a weak one (W/"...") whenever it
+ * compresses at the edge, which is every real browser request. A strict string
+ * compare therefore never matched, and each poll re-sent the whole fragment.
+ * Also handles comma-separated lists and "*".
+ */
+function etagMatches(header, etag) {
+  if (!header || !etag) return false;
+  if (header.trim() === '*') return true;
+  const strip = (v) => v.trim().replace(/^W\//, '');
+  const target = strip(etag);
+  return header.split(',').some((v) => strip(v) === target);
+}
+
 function securityHeaders(type) {
   const h = {
     'content-type': type,
@@ -173,7 +189,7 @@ export default {
     }
 
     const etag = metadata?.etag || '';
-    if (etag && request.headers.get('if-none-match') === etag) {
+    if (etagMatches(request.headers.get('if-none-match'), etag)) {
       return new Response(null, { status: 304, headers: { etag, 'cache-control': 'no-cache' } });
     }
 

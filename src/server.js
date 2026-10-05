@@ -122,6 +122,22 @@ const WARMING = Buffer.from(
   + `<div><b>NBA WIRE</b>Pulling the first wire…</div>`,
 );
 
+/**
+ * RFC 9110 weak comparison for If-None-Match.
+ *
+ * Cloudflare rewrites our strong ETag to a weak one (W/"...") whenever it
+ * compresses at the edge, which is every real browser request. A strict string
+ * compare therefore never matched, and each poll re-sent the whole fragment.
+ * Also handles comma-separated lists and "*".
+ */
+function etagMatches(header, etag) {
+  if (!header || !etag) return false;
+  if (header.trim() === '*') return true;
+  const strip = (v) => v.trim().replace(/^W\//, '');
+  const target = strip(etag);
+  return header.split(',').some((v) => strip(v) === target);
+}
+
 function pickEncoding(req) {
   const ae = req.headers['accept-encoding'] || '';
   if (/\bbr\b/.test(ae)) return ['br', 'br'];
@@ -177,7 +193,7 @@ const server = createServer((req, res) => {
   }
 
   // Revalidate cheaply: an unchanged wire costs the client a 304 and no body.
-  if (req.headers['if-none-match'] === asset.etag) {
+  if (etagMatches(req.headers['if-none-match'], asset.etag)) {
     res.writeHead(304, { etag: asset.etag, 'cache-control': 'no-cache' });
     return res.end();
   }

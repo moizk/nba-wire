@@ -1,5 +1,5 @@
 import { stripHtml } from './parse.js';
-import { detectTeams, looksLikeNBA, otherSportSignal, isWomensBasketball } from './teams.js';
+import { detectTeams, looksLikeNBA, otherSportSignal, isWomensBasketball, isNonNbaBasketball } from './teams.js';
 
 // ---------------------------------------------------------------------------
 // URL canonicalisation
@@ -154,6 +154,9 @@ export function buildWire(rawBySource, now = Date.now()) {
       // Applied to every source, not just the mixed-sport ones: the NBA feeds
       // at RealGM, TalkBasket and Yahoo all carry WNBA items too.
       if (isWomensBasketball({ ...e, link, summary: rawSummary })) continue;
+
+      // EuroLeague/FIBA coverage that has no NBA club in the frame.
+      if (isNonNbaBasketball({ ...e, link, summary: rawSummary })) continue;
 
       // Same URL from two feeds: keep the heavier source.
       const prior = seenUrl.get(link);
